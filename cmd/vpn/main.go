@@ -12,7 +12,7 @@ import (
 // cli options
 var mode = flag.String("m", "client", "VPN mode: client or server")
 var tunName = flag.String("tun-name", "vpn0", "TUN device name")
-var tunAddr = flag.String("tun-addr", "10.100.200.1/24", "TUN device primary addr")
+var tunAddr = flag.String("tun-addr", "", "TUN device primary addr")
 var tunRoute = flag.String("tun-route", "", "TUN device route")
 
 func main() {
