@@ -52,7 +52,7 @@ func main() {
 
 	// VPN startup
 	v := vpn.New(*mode)
-	if err := v.Pipe(ctx, td, conn); err != nil {
+	if err := v.Run(ctx, td, conn); err != nil {
 		log.Println(err)
 	}
 }

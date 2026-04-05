@@ -18,11 +18,11 @@ func New(mode string) *VPN {
 	return &VPN{mode}
 }
 
-// Pipe consults the mode setting and starts piping a to b and
+// Run consults the mode setting and starts piping a to b and
 // b to a. Caller owns lifecycle of a and b (Close and related cleanups).
 //
 // Pipe is blocking.
-func (v *VPN) Pipe(ctx context.Context, a, b io.ReadWriter) error {
+func (v *VPN) Run(ctx context.Context, a, b io.ReadWriter) error {
 	switch v.mode {
 	case "client":
 		return runClientMode(a, b)
