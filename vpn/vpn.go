@@ -9,7 +9,6 @@ import (
 )
 
 var ErrUnsupportedMode = errors.New("unsupported mode")
-var ErrModeNotImplemented = errors.New("mode not implemented")
 
 type VPN struct {
 	mode string
@@ -28,21 +27,48 @@ func (v *VPN) Pipe(ctx context.Context, a, b io.ReadWriter) error {
 	case "client":
 		return runClientMode(a, b)
 	case "server":
-		return ErrModeNotImplemented
+		return runServerMode(a, b)
 	default:
 		return ErrUnsupportedMode
 	}
 }
 
 // runClientMode parse-, and copy bytes between a local and remote endpoint.
-//
-// Note! Only local to remote is implemented for now.
 func runClientMode(local, remote io.ReadWriter) error {
+	// local -> remote
+	go func() {
+		for {
+			b := make([]byte, 2048) // MTU x2
+			n, err := local.Read(b)
+			if err != nil {
+				log.Printf("bad local read: %v", err)
+				continue
+			}
+			p, err := packet.Parse(b[:n])
+			if err != nil {
+				log.Printf("bad packet: %v", err)
+				continue
+			}
+			log.Printf("packet: %s", p)
+			if packet.IsICMP(p) {
+				_, err = local.Write(p.Bytes())
+				if err != nil {
+					log.Printf("bad local write: %v", err)
+				}
+				continue
+			}
+			_, err = remote.Write(p.Bytes())
+			if err != nil {
+				log.Printf("bad remote write: %v", err)
+			}
+		}
+	}()
+	// remote -> local
 	for {
 		b := make([]byte, 2048) // MTU x2
-		n, err := local.Read(b)
+		n, err := remote.Read(b)
 		if err != nil {
-			log.Printf("bad read: %v", err)
+			log.Printf("bad remote read: %v", err)
 			continue
 		}
 		p, err := packet.Parse(b[:n])
@@ -51,13 +77,50 @@ func runClientMode(local, remote io.ReadWriter) error {
 			continue
 		}
 		log.Printf("packet: %s", p)
-		if packet.IsICMP(p) {
+		_, err = local.Write(p.Bytes())
+		if err != nil {
+			log.Printf("bad local write: %v", err)
+		}
+	}
+}
+
+// runServerMode parse-, and copy bytes between a local and remote endpoint.
+func runServerMode(local, remote io.ReadWriter) error {
+	// remote -> local
+	go func() {
+		for {
+			b := make([]byte, 2048) // MTU x2
+			n, err := remote.Read(b)
+			if err != nil {
+				log.Printf("bad remote read: %v", err)
+				continue
+			}
+			p, err := packet.Parse(b[:n])
+			if err != nil {
+				log.Printf("bad packet: %v", err)
+				continue
+			}
+			log.Printf("packet: %s size: %d", p, len(p.Bytes()))
 			_, err = local.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad local write: %v", err)
 			}
+		}
+	}()
+	// local -> remote
+	for {
+		b := make([]byte, 2048) // MTU x2
+		n, err := local.Read(b)
+		if err != nil {
+			log.Printf("bad local read: %v", err)
 			continue
 		}
+		p, err := packet.Parse(b[:n])
+		if err != nil {
+			log.Printf("bad packet: %v", err)
+			continue
+		}
+		log.Printf("packet: %s size: %d", p, len(p.Bytes()))
 		_, err = remote.Write(p.Bytes())
 		if err != nil {
 			log.Printf("bad remote write: %v", err)
