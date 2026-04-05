@@ -12,6 +12,7 @@ var ErrUnsupportedIPv6 = errors.New("unsupported IPv6")
 var ErrUnsupportedProtocol = errors.New("unsupported protocol")
 
 var PROTO_ICMP int = 1
+var PROTO_TCP int = 6
 
 type Packet struct {
 	proto int
@@ -25,6 +26,9 @@ func (p *Packet) Bytes() []byte {
 func (p *Packet) String() string {
 	if IsICMP(p) {
 		return "ICMP"
+	}
+	if p.proto == PROTO_TCP {
+		return "TCP"
 	}
 	return "unknown protocol"
 }
@@ -47,6 +51,11 @@ func Parse(b []byte) (*Packet, error) {
 	switch ip.Protocol {
 	case PROTO_ICMP:
 		return parseICMP(b)
+	case PROTO_TCP:
+		return &Packet{
+			proto: PROTO_TCP,
+			bytes: b,
+		}, nil
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnsupportedProtocol, ip.Protocol)
 	}
