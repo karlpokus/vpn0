@@ -39,6 +39,9 @@ func parseICMP(b []byte) (*Packet, error) {
 		return nil, err
 	}
 	p := &Packet{
+		// pong src and dst
+		Src:   ip.Src,
+		Dst:   ip.Dst,
 		proto: ip.Protocol,
 		bytes: append(ipBytes, icmpBytes...),
 	}

@@ -3,6 +3,7 @@ package packet
 import (
 	"errors"
 	"fmt"
+	"net"
 
 	"golang.org/x/net/ipv4"
 )
@@ -15,6 +16,8 @@ var PROTO_ICMP int = 1
 var PROTO_TCP int = 6
 
 type Packet struct {
+	Src   net.IP
+	Dst   net.IP
 	proto int
 	bytes []byte
 }
@@ -24,11 +27,12 @@ func (p *Packet) Bytes() []byte {
 }
 
 func (p *Packet) String() string {
+	// format: proto src:dst
 	if IsICMP(p) {
-		return "ICMP"
+		return fmt.Sprintf("ICMP %s:%s", p.Src, p.Dst)
 	}
 	if p.proto == PROTO_TCP {
-		return "TCP"
+		return fmt.Sprintf("TCP %s:%s", p.Src, p.Dst)
 	}
 	return "unknown protocol"
 }
@@ -44,19 +48,25 @@ func Parse(b []byte) (*Packet, error) {
 	if b[0]>>4 != 4 {
 		return nil, ErrUnsupportedIPv6
 	}
-	ip, err := ipv4.ParseHeader(b)
+	h, err := ipv4.ParseHeader(b)
 	if err != nil {
 		return nil, err
 	}
-	switch ip.Protocol {
+	p := &Packet{
+		Src: h.Src,
+		Dst: h.Dst,
+	}
+	switch h.Protocol {
 	case PROTO_ICMP:
+		// TODO: let parseICMP return proto and bytes
+		// and we should probably return the ping packet
+		// and later create pong on demand.
 		return parseICMP(b)
 	case PROTO_TCP:
-		return &Packet{
-			proto: PROTO_TCP,
-			bytes: b,
-		}, nil
+		p.proto = PROTO_TCP
+		p.bytes = b
 	default:
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedProtocol, ip.Protocol)
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedProtocol, h.Protocol)
 	}
+	return p, nil
 }
