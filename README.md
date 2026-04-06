@@ -53,6 +53,7 @@ ACL test
 - [ ] graceful shutdown
 - [x] client
 - [x] server
+- [ ] kernel routing config in go
 - [ ] encryption
 - [ ] config file support
-- [ ] support multiple vpn clients
+- [x] support multiple vpn clients

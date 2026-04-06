@@ -1,45 +1,58 @@
 package vpn
 
 import (
-	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
+	"sync"
 	"vpn0/packet"
+	"vpn0/udp"
 )
 
 var ErrUnsupportedMode = errors.New("unsupported mode")
 
-type VPN struct {
-	mode string
-}
-
-func New(mode string) *VPN {
-	return &VPN{mode}
-}
-
-// Run consults the mode setting and starts piping a to b and
-// b to a. Caller owns lifecycle of a and b (Close and related cleanups).
-//
-// Pipe is blocking.
-func (v *VPN) Run(ctx context.Context, a, b io.ReadWriter) error {
-	switch v.mode {
+func Run(mode string, rw io.ReadWriter, UDPServerAddr string) error {
+	switch mode {
 	case "client":
-		return runClientMode(a, b)
+		conn, err := udp.NewClient(UDPServerAddr)
+		if err != nil {
+			return err
+		}
+		log.Printf("UDP connection to %s created", UDPServerAddr)
+		defer conn.Close()
+		if err := runClient(rw, conn); err != nil {
+			return err
+		}
 	case "server":
-		return runServerMode(a, b)
+		conn, err := udp.NewServer(UDPServerAddr)
+		if err != nil {
+			return err
+		}
+		log.Printf("UDP listener on %s created", UDPServerAddr)
+		defer conn.Close()
+		if err := runServer(rw, conn); err != nil {
+			return err
+		}
 	default:
-		return ErrUnsupportedMode
+		return fmt.Errorf("%w: *mode", ErrUnsupportedMode)
 	}
+	return nil
 }
 
-// runClientMode parse-, and copy bytes between a local and remote endpoint.
-func runClientMode(local, remote io.ReadWriter) error {
-	// local -> remote
+// runClient runs a vpn client that parse and copy bytes between
+// endpoints.
+//
+// Caller owns endpoint lifecycles (Close and related cleanups).
+//
+// runClient blocks.
+func runClient(rw io.ReadWriter, uc udp.Client) error {
+	// rw -> uc
 	go func() {
 		for {
 			b := make([]byte, 2048) // MTU x2
-			n, err := local.Read(b)
+			n, err := rw.Read(b)
 			if err != nil {
 				log.Printf("bad local read: %v", err)
 				continue
@@ -49,24 +62,24 @@ func runClientMode(local, remote io.ReadWriter) error {
 				log.Printf("bad packet: %v", err)
 				continue
 			}
-			log.Printf("packet: %s", p)
+			log.Println(p)
 			if packet.IsICMP(p) {
-				_, err = local.Write(p.Bytes())
+				_, err = rw.Write(p.Bytes())
 				if err != nil {
 					log.Printf("bad local write: %v", err)
 				}
 				continue
 			}
-			_, err = remote.Write(p.Bytes())
+			_, err = uc.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad remote write: %v", err)
 			}
 		}
 	}()
-	// remote -> local
+	// uc -> rw
 	for {
 		b := make([]byte, 2048) // MTU x2
-		n, err := remote.Read(b)
+		n, err := uc.Read(b)
 		if err != nil {
 			log.Printf("bad remote read: %v", err)
 			continue
@@ -76,21 +89,32 @@ func runClientMode(local, remote io.ReadWriter) error {
 			log.Printf("bad packet: %v", err)
 			continue
 		}
-		log.Printf("packet: %s", p)
-		_, err = local.Write(p.Bytes())
+		log.Println(p)
+		_, err = rw.Write(p.Bytes())
 		if err != nil {
 			log.Printf("bad local write: %v", err)
 		}
 	}
 }
 
-// runServerMode parse-, and copy bytes between a local and remote endpoint.
-func runServerMode(local, remote io.ReadWriter) error {
-	// remote -> local
+// runServer runs a vpn server that route, parse and copy bytes between
+// endpoints.
+//
+// Caller owns endpoint lifecycles (Close and related cleanups).
+//
+// runServer blocks.
+func runServer(rw io.ReadWriter, us udp.Server) error {
+	// clients is an in-mem concurrency-safe mapping
+	// of tunIP to public IP, both strings.
+	//
+	// It's used to lookup the client UDP addr by dst IP
+	// of return packets.
+	var clients sync.Map
+	// us -> rw
 	go func() {
 		for {
 			b := make([]byte, 2048) // MTU x2
-			n, err := remote.Read(b)
+			n, addr, err := us.ReadFrom(b)
 			if err != nil {
 				log.Printf("bad remote read: %v", err)
 				continue
@@ -100,17 +124,22 @@ func runServerMode(local, remote io.ReadWriter) error {
 				log.Printf("bad packet: %v", err)
 				continue
 			}
-			log.Printf("packet: %s size: %d", p, len(p.Bytes()))
-			_, err = local.Write(p.Bytes())
+			log.Println(p)
+			// save client IPs (no pre-existing check)
+			k := p.Src.String()
+			v := addr.String()
+			log.Printf("[DEBUG] storing %s to %v", k, v)
+			clients.Store(k, v)
+			_, err = rw.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad local write: %v", err)
 			}
 		}
 	}()
-	// local -> remote
+	// rw -> us
 	for {
 		b := make([]byte, 2048) // MTU x2
-		n, err := local.Read(b)
+		n, err := rw.Read(b)
 		if err != nil {
 			log.Printf("bad local read: %v", err)
 			continue
@@ -120,8 +149,20 @@ func runServerMode(local, remote io.ReadWriter) error {
 			log.Printf("bad packet: %v", err)
 			continue
 		}
-		log.Printf("packet: %s size: %d", p, len(p.Bytes()))
-		_, err = remote.Write(p.Bytes())
+		log.Println(p)
+		// lookup client UDP addr by packet dst IP
+		k := p.Dst.String()
+		v, ok := clients.Load(k)
+		if !ok {
+			log.Printf("bad lookup key: %s", k)
+			continue
+		}
+		addr, err := net.ResolveUDPAddr("udp", v.(string))
+		if err != nil {
+			log.Printf("bad lookup value: %v", v)
+			continue
+		}
+		_, err = us.WriteTo(p.Bytes(), addr)
 		if err != nil {
 			log.Printf("bad remote write: %v", err)
 		}
