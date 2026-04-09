@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"os"
+	"os/signal"
 
 	"vpn0/tun"
 	"vpn0/vpn"
@@ -33,7 +36,12 @@ func main() {
 	defer td.Close()
 	log.Printf("tun %s ready", tconf.Name)
 
-	if err := vpn.Run(*mode, td, *UDPServerAddr); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := vpn.Run(ctx, *mode, td, *UDPServerAddr); err != nil {
 		log.Println(err)
+		os.Exit(1)
 	}
+	log.Println("vpn exited")
 }

@@ -17,14 +17,18 @@ VMs
 
 ````sh
 # Create all the things
+#
+# Note! This as a guideline. Might not be complete.
+# Especially the 2nd interface on the server did
+# not attach properly one time.
 $ make init
 # Build and push artifacts
 $ make build
 $ make push
 # Run vpn client
-$ /tmp/bin/vpn -m client -tun-addr 10.100.3.1/24 -tun-route 10.100.2.0/24 -udp-laddr 10.100.1.231:8989 -udp-raddr 10.100.1.105:8989
+$ /tmp/bin/vpn -m client -tun-addr 10.100.3.1/24 -tun-route 10.100.2.0/24 -udp-server-addr 10.100.1.105:8989
 # Run vpn server
-$ /tmp/bin/vpn -m server -tun-addr 10.100.3.254/24 -udp-laddr 10.100.1.105:8989 -udp-raddr 10.100.1.231:8989
+$ /tmp/bin/vpn -m server -tun-addr 10.100.3.254/24 -udp-server-addr 10.100.1.105:8989
 # configure kernel routing
 $ /tmp/bin/kernel-routing.sh
 # Run test target
@@ -50,7 +54,7 @@ ACL test
 # Todos
 - [x] tun device test mode
 - [x] replace test mode with ICMP support
-- [ ] graceful shutdown
+- [x] graceful shutdown
 - [x] client
 - [x] server
 - [ ] kernel routing config in go
