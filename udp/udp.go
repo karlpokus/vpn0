@@ -15,7 +15,7 @@ type Server interface {
 	Close() error
 }
 
-func NewServer(addr string) (Server, error) {
+func NewServer(addr string) (*net.UDPConn, error) {
 	a, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
@@ -23,7 +23,7 @@ func NewServer(addr string) (Server, error) {
 	return net.ListenUDP("udp", a)
 }
 
-func NewClient(addr string) (Client, error) {
+func NewClient(addr string) (*net.UDPConn, error) {
 	a, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, err
