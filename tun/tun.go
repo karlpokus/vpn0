@@ -2,6 +2,7 @@ package tun
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -18,25 +19,13 @@ type Config struct {
 }
 
 // Device represents a TUN device
-type Device struct {
-	f *os.File
-}
-
-func (d *Device) Read(p []byte) (int, error) {
-	return d.f.Read(p)
-}
-
-func (d *Device) Write(p []byte) (int, error) {
-	return d.f.Write(p)
-}
-
-func (d *Device) Close() error {
-	return d.f.Close()
+type Device interface {
+	io.ReadWriteCloser
 }
 
 // New creates-, and configures a TUN device
 // and returns it.
-func New(conf Config) (*Device, error) {
+func New(conf Config) (Device, error) {
 	fd, err := unix.Open(fpath, os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s err: %w", fpath, err)
@@ -47,10 +36,8 @@ func New(conf Config) (*Device, error) {
 	if err := unix.SetNonblock(fd, true); err != nil {
 		return nil, fmt.Errorf("set nonBlock op err: %w", err)
 	}
-	d := &Device{
-		f: os.NewFile(uintptr(fd), fpath),
-	}
-	return d, configure(conf)
+	f := os.NewFile(uintptr(fd), fpath)
+	return f, configure(conf)
 }
 
 // ioctl binds an fd to a TUN device.

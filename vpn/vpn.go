@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
 	"vpn0/packet"
+	"vpn0/tun"
 	"vpn0/udp"
 
 	"golang.org/x/sync/errgroup"
@@ -16,7 +16,7 @@ import (
 
 var ErrUnsupportedMode = errors.New("unsupported mode")
 
-func Run(ctx context.Context, mode string, rwc io.ReadWriteCloser, UDPServerAddr string) error {
+func Run(ctx context.Context, mode string, td tun.Device, UDPServerAddr string) error {
 	switch mode {
 	case "client":
 		conn, err := udp.NewClient(UDPServerAddr)
@@ -25,7 +25,7 @@ func Run(ctx context.Context, mode string, rwc io.ReadWriteCloser, UDPServerAddr
 		}
 		log.Printf("UDP connection to %s created", UDPServerAddr)
 		defer conn.Close()
-		if err := runClient(ctx, rwc, conn); err != nil {
+		if err := runClient(ctx, td, conn); err != nil {
 			return err
 		}
 	case "server":
@@ -35,7 +35,7 @@ func Run(ctx context.Context, mode string, rwc io.ReadWriteCloser, UDPServerAddr
 		}
 		log.Printf("UDP listener on %s created", UDPServerAddr)
 		defer conn.Close()
-		if err := runServer(ctx, rwc, conn); err != nil {
+		if err := runServer(ctx, td, conn); err != nil {
 			return err
 		}
 	default:
@@ -53,19 +53,19 @@ func Run(ctx context.Context, mode string, rwc io.ReadWriteCloser, UDPServerAddr
 //
 // runClient exits after either the context is expired or a failed Read from
 // either endpoint.
-func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error {
+func runClient(ctx context.Context, td tun.Device, uc udp.Client) error {
 	var wg sync.WaitGroup
 	// errc is a single channel to report failed Reads from an endpoint.
 	//
 	// The channel is buffered so no goroutine is blocked from exiting.
 	errc := make(chan error, 2)
-	// rwc -> uc
+	// td -> uc
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for {
 			b := make([]byte, 2048) // MTU x2
-			n, err := rwc.Read(b)
+			n, err := td.Read(b)
 			if err != nil {
 				// fatal
 				errc <- err
@@ -78,7 +78,7 @@ func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error
 			}
 			log.Println(p)
 			if packet.IsICMP(p) {
-				_, err = rwc.Write(p.Bytes())
+				_, err = td.Write(p.Bytes())
 				if err != nil {
 					log.Printf("bad local write: %v", err)
 				}
@@ -90,7 +90,7 @@ func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error
 			}
 		}
 	}()
-	// uc -> rwc
+	// uc -> td
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -108,7 +108,7 @@ func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error
 				continue
 			}
 			log.Println(p)
-			_, err = rwc.Write(p.Bytes())
+			_, err = td.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad local write: %v", err)
 			}
@@ -120,7 +120,7 @@ func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error
 		err = ctx.Err()
 	case err = <-errc:
 	}
-	err = errors.Join(err, rwc.Close(), uc.Close())
+	err = errors.Join(err, td.Close(), uc.Close())
 	wg.Wait()
 	return err
 }
@@ -131,7 +131,7 @@ func runClient(ctx context.Context, rwc io.ReadWriteCloser, uc udp.Client) error
 // Caller owns endpoint lifecycles (Close and related cleanups).
 //
 // runServer blocks.
-func runServer(ctx context.Context, rwc io.ReadWriteCloser, us udp.Server) error {
+func runServer(ctx context.Context, td tun.Device, us udp.Server) error {
 	// clients is an in-mem concurrency-safe mapping
 	// of tunIP to public IP, both strings.
 	//
@@ -152,11 +152,11 @@ func runServer(ctx context.Context, rwc io.ReadWriteCloser, us udp.Server) error
 	// cleanup func
 	g.Go(func() error {
 		<-ctx.Done()
-		rwc.Close()
+		td.Close()
 		us.Close()
 		return ctx.Err()
 	})
-	// us -> rwc
+	// us -> td
 	g.Go(func() error {
 		for {
 			b := make([]byte, 2048) // MTU x2
@@ -179,17 +179,17 @@ func runServer(ctx context.Context, rwc io.ReadWriteCloser, us udp.Server) error
 			v := addr.String()
 			log.Printf("[DEBUG] storing %s to %v", k, v)
 			clients.Store(k, v)
-			_, err = rwc.Write(p.Bytes())
+			_, err = td.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad local write: %v", err)
 			}
 		}
 	})
-	// rwc -> us
+	// td -> us
 	g.Go(func() error {
 		for {
 			b := make([]byte, 2048) // MTU x2
-			n, err := rwc.Read(b)
+			n, err := td.Read(b)
 			if err != nil {
 				// graceful shutdown
 				if ctx.Err() != nil {
