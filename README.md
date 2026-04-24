@@ -40,6 +40,12 @@ nc -l -n -v -s 10.100.2.178 -p 7777
 nc -nv 10.100.2.178 7777
 ````
 
+Run tests
+
+````bash
+$ make test
+````
+
 ACL test
 
 ````bash
