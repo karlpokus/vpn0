@@ -11,13 +11,25 @@ import (
 
 var ErrUnsupportedMode = errors.New("unsupported mode")
 
+type Config struct {
+	Mode       string
+	ServerAddr string
+	TUN        tun.Config
+}
+
 // Run starts a vpn client or server depending on selected mode. It is blocking
 // and returns once the context expires or an endpoint reader fails, whichever
 // comes first.
-func Run(ctx context.Context, mode string, td tun.Device, UDPServerAddr string) error {
-	switch mode {
+func Run(ctx context.Context, conf Config) error {
+	td, err := tun.New(conf.TUN)
+	if err != nil {
+		return err
+	}
+	defer td.Close()
+
+	switch conf.Mode {
 	case "client":
-		conn, err := udp.NewClient(UDPServerAddr)
+		conn, err := udp.NewClient(conf.ServerAddr)
 		if err != nil {
 			return err
 		}
@@ -27,7 +39,7 @@ func Run(ctx context.Context, mode string, td tun.Device, UDPServerAddr string) 
 		}
 		return c.run(ctx)
 	case "server":
-		conn, err := udp.NewServer(UDPServerAddr)
+		conn, err := udp.NewServer(conf.ServerAddr)
 		if err != nil {
 			return err
 		}
