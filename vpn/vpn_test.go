@@ -9,6 +9,7 @@ import (
 	"net"
 	"testing"
 	"time"
+	"vpn0/session"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -21,6 +22,7 @@ import (
 type mockIO struct {
 	ReadC  chan []byte
 	WriteC chan []byte
+	Addr   *net.UDPAddr
 }
 
 // Read copies reads from ReadC to p.
@@ -37,14 +39,10 @@ func (m *mockIO) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Not implemented. Calls Read instead.
+// Not implemented. Calls Read with a static addr.
 func (m *mockIO) ReadFrom(p []byte) (int, net.Addr, error) {
-	fakeAddr, err := net.ResolveUDPAddr("udp", "10.200.0.1:8989")
-	if err != nil {
-		return 0, nil, err
-	}
 	n, err := m.Read(p)
-	return n, fakeAddr, err
+	return n, m.Addr, err
 }
 
 // Write writes p to WriteC
@@ -53,7 +51,7 @@ func (m *mockIO) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Not implemented. Calls Write instead.
+// Not implemented. Calls Write instead and ignores addr.
 func (m *mockIO) WriteTo(b []byte, _ net.Addr) (int, error) {
 	return m.Write(b)
 }
@@ -69,10 +67,16 @@ func (m *mockIO) Close() error {
 //
 // TODO: test roundtrip
 func Test_upstream(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second*10)
-	// Create mocks and channels.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
+	// Create mocks
 	//
 	// pipeC connects client UDP to server UDP.
+	//
+	// clientUDPAddr is used in session.Identity and
+	// serverUDP mock.
+	clientUDPAddr := &net.UDPAddr{
+		IP: net.ParseIP("10.100.1.231"),
+	}
 	pipeC := make(chan []byte)
 	clientTUN := &mockIO{
 		ReadC:  make(chan []byte),
@@ -85,42 +89,73 @@ func Test_upstream(t *testing.T) {
 	serverUDP := &mockIO{
 		ReadC:  pipeC,
 		WriteC: make(chan []byte),
+		Addr:   clientUDPAddr,
 	}
 	serverTUN := &mockIO{
 		ReadC:  make(chan []byte),
 		WriteC: make(chan []byte),
 	}
-	// Pass mocks to Client and Server and run them.
-	c, err := newClient(clientTUN, clientUDP)
+	// create keys
+	clientKey, err := privKey([]byte("wzTFMQqEk0Ss8BWC/vugD1tYhcuukUMSxkYEI31PvVM="))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := newServer(serverTUN, serverUDP)
+	clientPubKey, err := parsePubKey("bXVAuthrWKrum1W/PpgvwZipKqPkkbDacZ7mQguAFR0=")
 	if err != nil {
 		t.Fatal(err)
+	}
+	serverKey, err := privKey([]byte("ih64kDQhyIlogzyVHPTmS1b3cxhxyAad2buCGoS3xvI="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPubKey, err := parsePubKey("6EDDHi+d5i7OkATe76f1qfg9dxMND3TFKgHh4dpr+Vg=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pass mocks and keys to Client and Server and run them.
+	c := &client{
+		uc:        clientUDP,
+		td:        clientTUN,
+		key:       clientKey,
+		serverKey: serverPubKey,
+	}
+	s := &server{
+		us:  serverUDP,
+		td:  serverTUN,
+		key: serverKey,
+		clients: &session.Store{
+			Identities: []*session.Identity{
+				{
+					PubKey: clientPubKey,
+					UDP:    clientUDPAddr,
+				},
+			},
+		},
 	}
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return c.run(ctx) })
 	g.Go(func() error { return s.run(ctx) })
-	// Send test packet and make assertions on
-	// the entire *upstream route.
-	want := newPacket("10.0.0.1", "10.0.0.2")
-	clientTUN.ReadC <- want
-	got := <-serverTUN.WriteC
-	if !bytes.Equal(want, got) {
-		t.Errorf("got %v want %v", got, want)
-	}
-	// Assertions are done and all endpoints are back at reader blocking state.
-	//
-	// Now we cancel the context and expect that error be returned from errgroup.
-	//
-	// Cancelling the context will close all endpoints (unblocking readers)
-	// before returning.
-	cancel()
+	go func() {
+		// Send test packet and make assertions on
+		// the entire *upstream route.
+		want := newPacket("10.100.3.1", "10.100.2.178")
+		clientTUN.ReadC <- want
+		got := <-serverTUN.WriteC
+		if !bytes.Equal(want, got) {
+			t.Errorf("got %v want %v", got, want)
+		}
+		// Assertions are done and all endpoints are back at reader blocking state.
+		//
+		// Now we cancel the context and expect that error be returned from errgroup.
+		//
+		// Cancelling the context will close all endpoints (unblocking readers)
+		// before returning.
+		cancel()
+	}()
 	err = g.Wait()
+	// Anything but context.Canceled is considered a failure,
+	// including context.DeadlineExceeded.
 	if !errors.Is(err, context.Canceled) {
-		// Anything but context cancelled
-		// is considered a failure
 		t.Fatal(err)
 	}
 }
@@ -137,4 +172,19 @@ func newPacket(src, dst string) []byte {
 	copy(p[12:16], s)
 	copy(p[16:20], d)
 	return p
+}
+
+func Test_parseIdentities(t *testing.T) {
+	b := []byte(`
+	10.100.1.231 JL4VXLrwe57F6fZYw/nM5JXNsXnNgXpWuvIDh08gKGc=
+	`)
+	ids, err := parseIdentities(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := net.ParseIP("10.100.1.231")
+	got := ids[0].UDP.IP
+	if !got.Equal(want) {
+		t.Fatalf("got %s want %s", got, want)
+	}
 }

@@ -2,10 +2,10 @@ package vpn
 
 import (
 	"context"
+	"crypto/ecdh"
 	"log"
-	"net"
-	"sync"
 	"vpn0/packet"
+	"vpn0/session"
 	"vpn0/tun"
 	"vpn0/udp"
 
@@ -13,14 +13,11 @@ import (
 )
 
 type server struct {
-	us udp.Server
-	td tun.Device
-	// clients is an in-mem concurrency-safe mapping
-	// of tun IP to public IP, both strings.
-	//
-	// It's used to lookup client UDP addr by dst IP
-	// of return packets.
-	clients sync.Map
+	us  udp.Server
+	td  tun.Device
+	key *ecdh.PrivateKey
+	// A list of pre-approved identities
+	clients *session.Store
 }
 
 // upstream forwards packets upstream.
@@ -36,17 +33,36 @@ func (s *server) upstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			p, err := packet.Parse(b[:n])
+			id, err := s.clients.GetIdentity(addr)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			err = id.SetAddr(addr)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			if !id.Session.Established() {
+				sess, err := session.New(s.key, id.PubKey)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				id.Session = sess
+			}
+			b, err = packet.Decrypt(id.Session.Key, b[:n])
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			p, err := packet.Parse(b)
 			if err != nil {
 				log.Printf("bad packet: %v", err)
 				continue
 			}
 			log.Println(p)
-			// save client IPs (no pre-existing check)
-			k := p.Src.String()
-			v := addr.String()
-			log.Printf("[DEBUG] storing %s to %v", k, v)
-			s.clients.Store(k, v)
+			id.SetIP(p.Src)
 			_, err = s.td.Write(p.Bytes())
 			if err != nil {
 				log.Printf("bad local write: %v", err)
@@ -75,18 +91,35 @@ func (s *server) downstream(ctx context.Context) func() error {
 			}
 			log.Println(p)
 			// lookup client UDP addr by packet dst IP
-			k := p.Dst.String()
-			v, ok := s.clients.Load(k)
-			if !ok {
-				log.Printf("bad lookup key: %s", k)
-				continue
-			}
-			addr, err := net.ResolveUDPAddr("udp", v.(string))
+			addr, err := s.clients.GetAddr(p.Dst)
 			if err != nil {
-				log.Printf("bad lookup value: %v", v)
+				log.Println(err)
 				continue
 			}
-			_, err = s.us.WriteTo(p.Bytes(), addr)
+			id, err := s.clients.GetIdentity(addr)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			if !id.Session.Established() {
+				sess, err := session.New(s.key, id.PubKey)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				id.Session = sess
+			}
+			nonce, err := id.Session.Nonce()
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			ct, err := packet.Encrypt(id.Session.Key, nonce, p.Bytes())
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			_, err = s.us.WriteTo(ct, addr)
 			if err != nil {
 				log.Printf("bad remote write: %v", err)
 			}
@@ -105,12 +138,4 @@ func (s *server) run(ctx context.Context) error {
 		return err
 	}
 	return ctx.Err()
-}
-
-// newServer returns a configured server.
-func newServer(td tun.Device, us udp.Server) (*server, error) {
-	return &server{
-		us: us,
-		td: td,
-	}, nil
 }

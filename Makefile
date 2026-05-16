@@ -12,6 +12,7 @@ test:
 
 init:
 	cp -iv kernel-routing.sh bin
+	cp -iv clients.txt bin
 
 	lxc network create vpn0-public ipv4.address=10.100.1.1/24 ipv4.nat=false ipv6.address=none ipv6.nat=false
 	lxc network create vpn0-private ipv4.address=10.100.2.1/24 ipv4.nat=false ipv6.address=none ipv6.nat=false

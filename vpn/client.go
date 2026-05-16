@@ -2,8 +2,10 @@ package vpn
 
 import (
 	"context"
+	"crypto/ecdh"
 	"log"
 	"vpn0/packet"
+	"vpn0/session"
 	"vpn0/tun"
 	"vpn0/udp"
 
@@ -11,8 +13,11 @@ import (
 )
 
 type client struct {
-	uc udp.Client
-	td tun.Device
+	uc        udp.Client
+	td        tun.Device
+	key       *ecdh.PrivateKey
+	serverKey *ecdh.PublicKey
+	session   *session.Session
 }
 
 // upstream forwards packets upstream.
@@ -41,7 +46,22 @@ func (c *client) upstream(ctx context.Context) func() error {
 				}
 				continue
 			}
-			_, err = c.uc.Write(p.Bytes())
+			if !c.session.Established() {
+				s, err := session.New(c.key, c.serverKey)
+				if err != nil {
+					return err
+				}
+				c.session = s
+			}
+			nonce, err := c.session.Nonce()
+			if err != nil {
+				return err
+			}
+			ct, err := packet.Encrypt(c.session.Key, nonce, p.Bytes())
+			if err != nil {
+				return err
+			}
+			_, err = c.uc.Write(ct)
 			if err != nil {
 				log.Printf("bad remote write: %v", err)
 			}
@@ -62,7 +82,18 @@ func (c *client) downstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			p, err := packet.Parse(b[:n])
+			if !c.session.Established() {
+				s, err := session.New(c.key, c.serverKey)
+				if err != nil {
+					return err
+				}
+				c.session = s
+			}
+			b, err = packet.Decrypt(c.session.Key, b[:n])
+			if err != nil {
+				return err
+			}
+			p, err := packet.Parse(b)
 			if err != nil {
 				log.Printf("bad packet: %v", err)
 				continue
@@ -87,12 +118,4 @@ func (c *client) run(ctx context.Context) error {
 		return err
 	}
 	return ctx.Err()
-}
-
-// newClient returns a configured client.
-func newClient(td tun.Device, uc udp.Client) (*client, error) {
-	return &client{
-		uc: uc,
-		td: td,
-	}, nil
 }

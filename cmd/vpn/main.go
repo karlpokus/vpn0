@@ -17,12 +17,18 @@ var tunName = flag.String("tun-name", "vpn0", "TUN device name")
 var tunAddr = flag.String("tun-addr", "", "TUN device primary addr")
 var tunRoute = flag.String("tun-route", "", "TUN device route")
 var serverAddr = flag.String("server-addr", "", "Server addr: host:port")
+var serverPubKey = flag.String("server-pubkey", "", "Server public key")
+var keyPath = flag.String("key-path", "", "Filepath to private key")
+var identityPath = flag.String("id-path", "", "Filepath to pre-approved identities")
 
 func main() {
 	flag.Parse()
 	conf := vpn.Config{
-		Mode:       *mode,
-		ServerAddr: *serverAddr,
+		Mode:         *mode,
+		ServerAddr:   *serverAddr,
+		ServerPubKey: *serverPubKey,
+		KeyPath:      *keyPath,
+		IdentityPath: *identityPath,
 		TUN: tun.Config{
 			Name:  *tunName,
 			Addr:  *tunAddr,
