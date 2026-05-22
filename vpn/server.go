@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"log"
+	"net"
 	"vpn0/packet"
 	"vpn0/session"
 	"vpn0/tun"
@@ -33,41 +34,45 @@ func (s *server) upstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			id, err := s.clients.GetIdentity(addr)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			err = id.SetAddr(addr)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			if !id.Session.Established() {
-				sess, err := session.New(s.key, id.PubKey)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-				id.Session = sess
-			}
-			b, err = packet.Decrypt(id.Session.Key, b[:n])
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			p, err := packet.Parse(b)
-			if err != nil {
-				log.Printf("bad packet: %v", err)
-				continue
-			}
-			log.Println(p)
-			id.SetIP(p.Src)
-			_, err = s.td.Write(p.Bytes())
-			if err != nil {
-				log.Printf("bad local write: %v", err)
-			}
+			go s.upstreamHandler(b[:n], addr)
 		}
+	}
+}
+
+func (s *server) upstreamHandler(b []byte, addr net.Addr) {
+	id, err := s.clients.GetIdentity(addr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = id.SetAddr(addr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if !id.Session.Established() {
+		sess, err := session.New(s.key, id.PubKey)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		id.Session = sess
+	}
+	b, err = packet.Decrypt(id.Session.Key, b)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	p, err := packet.Parse(b)
+	if err != nil {
+		log.Printf("bad packet: %v", err)
+		return
+	}
+	log.Println(p)
+	id.SetIP(p.Src)
+	_, err = s.td.Write(p.Bytes())
+	if err != nil {
+		log.Printf("bad local write: %v", err)
 	}
 }
 
@@ -84,46 +89,50 @@ func (s *server) downstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			p, err := packet.Parse(b[:n])
-			if err != nil {
-				log.Printf("bad packet: %v", err)
-				continue
-			}
-			log.Println(p)
-			// lookup client UDP addr by packet dst IP
-			addr, err := s.clients.GetAddr(p.Dst)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			id, err := s.clients.GetIdentity(addr)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			if !id.Session.Established() {
-				sess, err := session.New(s.key, id.PubKey)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-				id.Session = sess
-			}
-			nonce, err := id.Session.Nonce()
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			ct, err := packet.Encrypt(id.Session.Key, nonce, p.Bytes())
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			_, err = s.us.WriteTo(ct, addr)
-			if err != nil {
-				log.Printf("bad remote write: %v", err)
-			}
+			go s.downstreamHandler(b[:n])
 		}
+	}
+}
+
+func (s *server) downstreamHandler(b []byte) {
+	p, err := packet.Parse(b)
+	if err != nil {
+		log.Printf("bad packet: %v", err)
+		return
+	}
+	log.Println(p)
+	// lookup client UDP addr by packet dst IP
+	addr, err := s.clients.GetAddr(p.Dst)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	id, err := s.clients.GetIdentity(addr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if !id.Session.Established() {
+		sess, err := session.New(s.key, id.PubKey)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		id.Session = sess
+	}
+	nonce, err := id.Session.Nonce()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	ct, err := packet.Encrypt(id.Session.Key, nonce, p.Bytes())
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	_, err = s.us.WriteTo(ct, addr)
+	if err != nil {
+		log.Printf("bad remote write: %v", err)
 	}
 }
 

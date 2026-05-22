@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"math"
+	"sync/atomic"
 )
 
 var ErrCounterExhausted = errors.New("counter exhausted")
@@ -14,7 +14,7 @@ var ErrZeroPrefix = errors.New("zero prefix")
 type Session struct {
 	Key     Key
 	prefix  [4]byte
-	counter uint64
+	counter atomic.Uint64
 }
 
 // Established returns true if the Session is established and ready to use.
@@ -32,7 +32,8 @@ func (s *Session) Established() bool {
 // Nonce returns a 12 byte nonce and a non-nil error if any
 // pre-requisites are missing.
 func (s *Session) Nonce() ([12]byte, error) {
-	if s.counter == math.MaxUint64 {
+	n := s.counter.Add(1)
+	if n == 0 {
 		return [12]byte{}, ErrCounterExhausted
 	}
 	if s.prefix == [4]byte{} {
@@ -40,8 +41,7 @@ func (s *Session) Nonce() ([12]byte, error) {
 	}
 	var nonce [12]byte
 	copy(nonce[:4], s.prefix[:])
-	binary.BigEndian.PutUint64(nonce[4:], s.counter)
-	s.counter++
+	binary.BigEndian.PutUint64(nonce[4:], n)
 	return nonce, nil
 }
 

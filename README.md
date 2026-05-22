@@ -78,4 +78,5 @@ ACL test
 - [x] support multiple vpn clients
 - [ ] deny client to client
 - [ ] fix local ICMP
-- [ ] concurrent packet handlers
+- [x] concurrent packet handlers
+- [ ] less packet allocations

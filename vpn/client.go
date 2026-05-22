@@ -33,39 +33,46 @@ func (c *client) upstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			p, err := packet.Parse(b[:n])
-			if err != nil {
-				log.Printf("bad packet: %v", err)
-				continue
-			}
-			log.Println(p)
-			if packet.IsICMP(p) {
-				_, err = c.td.Write(p.Bytes())
-				if err != nil {
-					log.Printf("bad local write: %v", err)
-				}
-				continue
-			}
-			if !c.session.Established() {
-				s, err := session.New(c.key, c.serverKey)
-				if err != nil {
-					return err
-				}
-				c.session = s
-			}
-			nonce, err := c.session.Nonce()
-			if err != nil {
-				return err
-			}
-			ct, err := packet.Encrypt(c.session.Key, nonce, p.Bytes())
-			if err != nil {
-				return err
-			}
-			_, err = c.uc.Write(ct)
-			if err != nil {
-				log.Printf("bad remote write: %v", err)
-			}
+			go c.upstreamHandler(b[:n])
 		}
+	}
+}
+
+func (c *client) upstreamHandler(b []byte) {
+	p, err := packet.Parse(b)
+	if err != nil {
+		log.Printf("bad packet: %v", err)
+		return
+	}
+	log.Println(p)
+	if packet.IsICMP(p) {
+		_, err = c.td.Write(p.Bytes())
+		if err != nil {
+			log.Printf("bad local write: %v", err)
+		}
+		return
+	}
+	if !c.session.Established() {
+		s, err := session.New(c.key, c.serverKey)
+		if err != nil {
+			log.Printf("bad session: %v", err)
+			return
+		}
+		c.session = s
+	}
+	nonce, err := c.session.Nonce()
+	if err != nil {
+		log.Printf("bad nonce: %v", err)
+		return
+	}
+	ct, err := packet.Encrypt(c.session.Key, nonce, p.Bytes())
+	if err != nil {
+		log.Printf("bad encyption: %v", err)
+		return
+	}
+	_, err = c.uc.Write(ct)
+	if err != nil {
+		log.Printf("bad remote write: %v", err)
 	}
 }
 
@@ -82,28 +89,34 @@ func (c *client) downstream(ctx context.Context) func() error {
 				}
 				return err
 			}
-			if !c.session.Established() {
-				s, err := session.New(c.key, c.serverKey)
-				if err != nil {
-					return err
-				}
-				c.session = s
-			}
-			b, err = packet.Decrypt(c.session.Key, b[:n])
-			if err != nil {
-				return err
-			}
-			p, err := packet.Parse(b)
-			if err != nil {
-				log.Printf("bad packet: %v", err)
-				continue
-			}
-			log.Println(p)
-			_, err = c.td.Write(p.Bytes())
-			if err != nil {
-				log.Printf("bad local write: %v", err)
-			}
+			go c.downstreamHandler(b[:n])
 		}
+	}
+}
+
+func (c *client) downstreamHandler(b []byte) {
+	if !c.session.Established() {
+		s, err := session.New(c.key, c.serverKey)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		c.session = s
+	}
+	b, err := packet.Decrypt(c.session.Key, b)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	p, err := packet.Parse(b)
+	if err != nil {
+		log.Printf("bad packet: %v", err)
+		return
+	}
+	log.Println(p)
+	_, err = c.td.Write(p.Bytes())
+	if err != nil {
+		log.Printf("bad local write: %v", err)
 	}
 }
 

@@ -15,9 +15,8 @@ func TestNonce(t *testing.T) {
 		}
 	})
 	t.Run("ErrCounterExhausted", func(t *testing.T) {
-		s := &Session{
-			counter: math.MaxUint64,
-		}
+		s := &Session{}
+		s.counter.Add(math.MaxUint64)
 		_, err := s.Nonce()
 		if !errors.Is(err, ErrCounterExhausted) {
 			t.Fatalf("want %v got %v", ErrCounterExhausted, err)
