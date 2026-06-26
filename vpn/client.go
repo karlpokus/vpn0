@@ -60,17 +60,19 @@ func (c *client) upstreamHandler(b []byte) {
 		}
 		c.session = s
 	}
-	nonce, err := c.session.Nonce()
+	ct, err := c.session.Encrypt(p.Bytes())
 	if err != nil {
-		log.Printf("bad nonce: %v", err)
+		log.Printf("bad bytes: %v", err)
 		return
 	}
-	ct, err := packet.Encrypt(c.session.Key, nonce, p.Bytes())
+	// hardcoding data frames for now
+	f := packet.NewFrame(packet.OpData, ct)
+	b, err = f.MarshalBinary()
 	if err != nil {
-		log.Printf("bad encyption: %v", err)
+		log.Printf("bad marshalling: %v", err)
 		return
 	}
-	_, err = c.uc.Write(ct)
+	_, err = c.uc.Write(b)
 	if err != nil {
 		log.Printf("bad remote write: %v", err)
 	}
@@ -101,9 +103,17 @@ func (c *client) downstreamHandler(b []byte) {
 			log.Println(err)
 			return
 		}
+		// Note! not concurrency-safe
 		c.session = s
 	}
-	b, err := packet.Decrypt(c.session.Key, b)
+	f, err := packet.ParseFrame(b)
+	// Only data frames for now
+	if f.Header.OpCode != packet.OpData {
+		log.Printf("illegal opcode: %d", f.Header.OpCode)
+		return
+	}
+	// Data frame payloads are encrypted
+	b, err = c.session.Decrypt(f.Payload)
 	if err != nil {
 		log.Println(err)
 		return
